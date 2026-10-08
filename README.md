@@ -217,3 +217,4 @@ code and explanations must still be read, tested, and understood by the student 
 peer evaluation.  In particular, the student should be able to explain the parser,
 time-expanded network, flow algorithm, simultaneous-capacity rules, restricted movement,
 and complexity without relying on AI during the defense.
+# fly-in
