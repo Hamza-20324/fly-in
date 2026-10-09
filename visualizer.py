@@ -427,7 +427,7 @@ class GraphicalVisualizer:
         return (
             point[0] + math.cos(angle) * radius,
             point[1] + math.sin(angle) * radius,
-    )
+        )
 
     def _color(self, color: str | None) -> str:
         """Return a valid Tk color."""

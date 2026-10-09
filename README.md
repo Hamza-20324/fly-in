@@ -4,24 +4,19 @@
 
 ## Description
 
-Fly-in is an object-oriented Python 3.10+ simulation that routes a fleet of drones
-from one start zone to one end zone through a capacitated graph.  The implementation
-respects zone types, zone occupancy, connection capacity, simultaneous turns,
-restricted two-turn movements, blocked zones, strategic waiting, and the exact
-step-by-step terminal output required by the subject.
+Fly-in is an object-oriented Python 3.10+ project that simulates the movement of drones through a capacitated graph.
 
-Correctness is treated independently from optimization.  The routing engine builds a
-time-expanded flow network and searches for the smallest horizon that can deliver the
-whole fleet.  A min-cost tie-breaker reduces unnecessary waiting and prefers priority
-zones when equally fast schedules are available.
+The goal is to move all drones from a start zone to an end zone while respecting zone capacities, connection capacities, blocked zones, priority zones, restricted zones, simultaneous turns, waiting when necessary, and the required simulation output format.
 
-No external graph library is used.
+The project also includes a graphical visualization using Python `tkinter`.
 
-## Instructions
+The optimizer searches for a valid schedule with the minimum feasible number of turns.
+
+No external graph library such as NetworkX is used.
+
+## Requirements
 
 Python 3.10 or newer is required.
-
-Create an isolated environment and install development tools:
 
 ```bash
 python3 -m venv .venv
@@ -29,146 +24,186 @@ source .venv/bin/activate
 make install
 ```
 
-Run the provided example:
+## Usage
 
 ```bash
 make run
+python3 main.py your_map.map
+python3 main.py your_map.map --visual
+python3 main.py your_map.map --stats
+python3 main.py your_map.map --visual --stats
 ```
 
-Run another map:
-
-```bash
-make run MAP=your_map.txt
-```
-
-Request colored visual state output:
-
-```bash
-make run MAP=your_map.txt ARGS="--visual"
-```
-
-Print the optimized turn count to stderr while keeping stdout in the required format:
-
-```bash
-make run MAP=your_map.txt ARGS="--stats"
-```
-
-Development checks:
+## Development commands
 
 ```bash
 make test
 make lint
-make lint-strict   # optional stronger mypy mode
-```
-
-Debug with Python's built-in debugger:
-
-```bash
-make debug MAP=your_map.txt
+make lint-strict
+make debug
+make clean
 ```
 
 ## Input format
 
-A map begins with a positive drone count, then zones and bidirectional connections:
-
 ```text
 nb_drones: 5
+
 start_hub: hub 0 0 [color=green]
 end_hub: goal 10 10 [color=yellow]
+
 hub: roof1 3 4 [zone=restricted color=red]
-hub: corridorA 4 3 [zone=priority max_drones=2]
+hub: roof2 6 2 [zone=normal color=blue]
+hub: corridorA 4 3 [zone=priority color=green max_drones=2]
+hub: tunnelB 7 4 [zone=normal color=red]
+hub: obstacleX 5 5 [zone=blocked color=gray]
+
 connection: hub-roof1
-connection: hub-corridorA [max_link_capacity=2]
-connection: roof1-goal
-connection: corridorA-goal
+connection: hub-corridorA
+connection: roof1-roof2
+connection: roof2-goal
+connection: corridorA-tunnelB [max_link_capacity=2]
+connection: tunnelB-goal
 ```
 
-Supported zone types are `normal`, `blocked`, `restricted`, and `priority`.
-Regular zone capacity defaults to 1; start and end capacity is unlimited.
-Connection capacity defaults to 1.
+## Zone types
 
-## Algorithm and implementation strategy
+- `normal`: movement cost 1 turn.
+- `priority`: movement cost 1 turn and preferred when equally fast schedules are available.
+- `restricted`: entering the zone takes 2 turns.
+- `blocked`: inaccessible.
 
-### 1. Strict parser
+## Capacities
 
-`MapParser` validates the first drone declaration, unique zone names, integer
-coordinates, metadata syntax and values, zone types, positive capacities, one start,
-one end, connection ordering, and duplicate bidirectional connections.  Parse errors
-include their line and cause.  A syntactically valid but disconnected map is reported
-separately as an unsolvable graph.
+Normal zones have a default capacity of 1 drone. A custom zone capacity is defined with `max_drones`.
 
-### 2. Weighted lower bound
+Connections have a default capacity of 1 drone. A custom connection capacity is defined with `max_link_capacity`.
 
-A custom Dijkstra pass computes the shortest possible travel time to the end.  Entering
-normal/priority zones costs one turn, entering restricted zones costs two, and blocked
-zones cannot be entered.  This supplies the lower bound for the schedule search.
+The start and end zones have unlimited effective capacity.
 
-### 3. Time-expanded min-cost flow
+## Project structure
 
-For a candidate horizon `T`, each usable zone is copied at every integer time from 0 to
-T.  Every zone layer is split into an input/output pair so `max_drones` is represented
-as a node capacity.  Start and end use the fleet size as their effective capacity.
+```text
+main.py        Program entry point and command-line handling.
+parser.py      Parses and validates map files.
+models.py      Contains the project data models.
+graph.py       Stores zones, connections, start, and end zones.
+flow.py        Implements the custom minimum-cost flow algorithm.
+optimizer.py   Searches for a valid minimum-turn drone schedule.
+simulator.py   Validates the schedule and generates simulation turns.
+visualizer.py  Draws the graph and animates drone movements.
+errors.py      Contains project-specific exceptions.
+example.map    Example map used for demonstration.
+test_flyin.py  Local development tests.
+```
 
-Waiting advances one layer.  A normal or priority movement advances one turn.  A
-movement into a restricted zone advances two turns, representing the mandatory turn in
-flight.  Connection edges carry `max_link_capacity`.  A custom successive-shortest-path
-min-cost max-flow implementation sends all drones through this temporal network.
+## Parser
 
-The optimizer first finds a feasible upper horizon and then binary-searches the minimum
-feasible horizon.  Waiting has a higher tie-break cost and entering a priority zone has
-a lower one, so equal-turn solutions prefer productive movement and priority zones.
+`MapParser` validates the drone count, start and end zones, unique zone names, integer coordinates, metadata, zone types, positive capacities, connection endpoints, connection ordering, and duplicate connections.
 
-### 4. Integral flow decomposition
+A syntactically valid graph may still be disconnected. In that case, the parser succeeds but the solver reports that no route exists.
 
-All capacities are integers, therefore the computed flow is integral.  It is decomposed
-into one plan per drone.  Restricted moves generate a connection output on their first
-turn and the destination-zone output on the following turn.
+## Routing strategy
 
-### 5. Independent validation
+The optimizer computes weighted shortest-path information toward the end zone and then builds a time-expanded network.
 
-Before any result is printed, `Simulator` validates every drone route again: adjacency,
-blocked zones, movement durations, delivery termination, zone occupancy at every turn,
-and shared connection use.  This second pass is intentionally separate from the
-optimizer so scheduling bugs fail loudly instead of producing invalid output.
+Movement costs are:
 
-### Complexity
+```text
+normal      = 1 turn
+priority    = 1 turn
+restricted  = 2 turns
+blocked     = inaccessible
+```
 
-Let `V` be zones, `E` connections, `T` the final turn count, and `D` drones.  The
-expanded network has `O(TV)` nodes and `O(T(V + E))` edges.  The min-cost flow sends at
-most `D` augmentations in the typical unit-bottleneck case; each shortest residual path
-uses a heap.  Memory is `O(T(V + E))`.  Paths/schedules are computed once for a horizon
-and reused for output; drones are not independently re-running Dijkstra.
+The time-expanded network represents drone movement, waiting, zone capacities, connection capacities, and restricted movement over time.
 
-## Movement semantics
+A custom minimum-cost maximum-flow implementation is used. The project does not use external graph libraries.
 
-All movements in one turn are simultaneous.  A zone vacated during a turn can be used
-by another arrival in that same turn.  A restricted move occupies the connection during
-its intermediate turn and must arrive on the next turn; it cannot wait on the
-connection.  Delivered drones disappear from future simulation state.
+The optimizer searches for the minimum feasible turn count and converts the resulting integral flow into individual drone plans.
 
-## Visual representation
+## Simulation rules
 
-`--visual` renders every zone after each turn and lists drones currently in transit.
-Known color names use ANSI terminal colors; other valid single-word color values are
-shown with emphasized text.  This view is deliberately optional so normal stdout can
-remain exactly compatible with the required simulation format.
+All drones start in the start zone.
 
-## Example input and expected output
+All movements in the same turn are simultaneous.
 
-Input:
+A drone may move to an adjacent zone, start moving toward a restricted zone, or wait.
+
+A zone vacated during a turn may be used by another drone arriving during that same turn.
+
+A restricted movement takes two turns. During the intermediate turn, the drone is considered to be in flight on the connection.
+
+Once a drone reaches the end zone, it is considered delivered and is no longer tracked.
+
+The simulation finishes when every drone reaches the end zone.
+
+## Simulation output format
+
+Each simulation turn is represented by one line.
+
+Normal movement:
+
+```text
+D<ID>-<zone>
+```
+
+Restricted movement while the drone is still in flight:
+
+```text
+D<ID>-<connection>
+```
+
+Example:
+
+```text
+D1-roof1 D2-corridorA
+D1-roof2 D2-tunnelB
+D1-goal D2-goal
+```
+
+Drones that do not move during a turn are omitted. Delivered drones are not printed again.
+
+## Graphical visualization
+
+The project includes a graphical visualizer implemented with Python `tkinter`.
+
+The graphical view displays zones as circles, zone names, start and end zones, blocked zones, graph connections, connection arrows for visual clarity, drone identifiers, drone movement animations, the current turn, and the delivered drone count.
+
+Zone positions use the `x` and `y` coordinates from the map.
+
+The visualizer automatically adjusts the size of zones and drones according to the size of the map. Small maps use larger circles, while larger maps use smaller circles to reduce overlap.
+
+The graph is automatically centered when the window size changes.
+
+Press `SPACE` to advance exactly one turn. Each press animates the corresponding drone movements.
+
+The graphical representation is additional to the mandatory textual simulation output.
+
+## Drone display
+
+Drones are displayed inside their current zone.
+
+When multiple drones are allowed inside the same zone, they are distributed inside the zone circle so they do not completely overlap.
+
+Delivered drones disappear from the graphical simulation.
+
+## Example
 
 ```text
 nb_drones: 2
+
 start_hub: s 0 0
 hub: a 1 0
 hub: b 2 0
 end_hub: e 3 0
+
 connection: s-a
 connection: a-b
 connection: b-e
 ```
 
-One optimal output is:
+Possible output:
 
 ```text
 D1-a
@@ -177,47 +212,48 @@ D1-e D2-b
 D2-e
 ```
 
-Each line is one turn.  Waiting drones are omitted.  A drone is no longer tracked after
-it reaches `end_hub`.
+## Error handling
+
+Invalid maps generate clear errors, including invalid drone count, missing start or end zone, duplicate zones, invalid coordinates, invalid zone type, invalid capacity, unknown connection endpoints, and duplicate connections.
+
+A disconnected but syntactically valid graph is not a parser error.
+
+```text
+Error: no path exists between start_hub and end_hub
+```
 
 ## Bonus / Challenger
 
-The optimizer is designed to search for the minimum feasible turn count and therefore
-also targets the optional Challenger objective.  The subject's official bonus is to
-solve **The Impossible Dream** with 25 drones in **43 turns**. The repository includes
-`impossible_dream.map`, and the test suite verifies that the general optimizer reaches
-the required 43-turn optimum. `challenger_synthetic.map` is kept only as a small
-regression map for the 19 + 24 throughput formula.
+The optimizer searches for the minimum feasible turn count.
 
-The synthetic map is **not** the official Challenger map.  The official subject map was
-not bundled into this repository; when it is available, run it with the same command
-and verify the reported turn count:
+The Fly-in subject defines the optional Challenger benchmark as **The Impossible Dream**, with 25 drones in 43 turns.
+
+The implementation is designed to support large valid maps, and the graphical visualizer adapts its node and drone sizes for larger graphs.
+
+The exact 43-turn result should only be claimed after testing the official Challenger map successfully.
 
 ```bash
-make run MAP=the_impossible_dream.map ARGS="--stats"
+python3 main.py the_impossible_dream.map --stats
 ```
+
+## Complexity
+
+Let `V` be the number of zones, `E` the number of connections, `T` the number of turns, and `D` the number of drones.
+
+The time-expanded network contains approximately `O(TV)` nodes and `O(T(V + E))` edges.
+
+Memory usage is approximately `O(T(V + E))`.
 
 ## Resources
 
-Classic references used for the concepts implemented here:
+Resources used to understand and develop the project include Python 3 documentation, Python typing documentation, `dataclasses`, `heapq`, `tkinter`, PEP 257, Dijkstra's shortest-path algorithm, minimum-cost maximum-flow, time-expanded networks, and the Fly-in 42 subject.
 
-- Python 3 documentation: data classes, `heapq`, typing, exceptions, context managers.
-- PEP 257 for docstring conventions.
-- Dijkstra's shortest-path algorithm.
-- Time-expanded networks and minimum-cost maximum-flow as standard graph-optimization
-  techniques.
-- The Fly-in v2.0 42 subject is the authoritative source for map syntax, movement rules,
-  capacities, output format, and benchmark targets.
+The Fly-in subject is the authoritative source for map syntax, zone behavior, capacities, movement rules, output format, and benchmark requirements.
 
-### AI usage
+## AI usage
 
-AI assistance was used to help review the Fly-in subject, enumerate parser and movement
-edge cases, discuss architecture, and review/test implementation ideas.  The generated
-code and explanations must still be read, tested, and understood by the student before
-peer evaluation.  In particular, the student should be able to explain the parser,
-time-expanded network, flow algorithm, simultaneous-capacity rules, restricted movement,
-and complexity without relying on AI during the defense.
-# fly-in
-# fly-in
-# fly-in
-# fly-in
+AI assistance was used to help review the Fly-in subject, discuss the project architecture, identify parser and simulation edge cases, and review visualization ideas.
+
+All generated code and explanations must be read, tested, and understood before peer evaluation.
+
+The student should be able to explain map parsing, graph representation, zone types, capacities, shortest-path logic, time-expanded networks, minimum-cost flow, simultaneous movement, restricted movement, simulation validation, graphical visualization, and project complexity.
